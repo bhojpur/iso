@@ -28,21 +28,10 @@ import (
 
 	"github.com/bhojpur/iso/pkg/burner"
 	"github.com/bhojpur/iso/pkg/schema"
+	"github.com/bhojpur/iso/pkg/version"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/twpayne/go-vfs"
-)
-
-const (
-	CLIVersion = "0.0.1"
-)
-
-// Build time and commit information.
-//
-// ⚠️ WARNING: should only be set by "-ldflags".
-var (
-	BuildTime   string
-	BuildCommit string
 )
 
 func fail(s string) {
@@ -72,7 +61,7 @@ func init() {
 var rootCmd = &cobra.Command{
 	Use:     "isomake",
 	Short:   "generate ISO images using Bhojpur ISO manager tools",
-	Version: fmt.Sprintf("%s-g%s %s", CLIVersion, BuildCommit, BuildTime),
+	Version: fmt.Sprintf("%s-g%s %s", version.Version, version.BuildCommit, version.BuildTime),
 	Long: `It reads specifications to generate ISO image files from Bhojpur ISO repositories or trees.
 `,
 	Run: func(cmd *cobra.Command, args []string) {

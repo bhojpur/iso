@@ -11,19 +11,23 @@ builds:
   - id: isomake
     env:
     - CGO_ENABLED=0
-    main: cmd/machine/main.go
+    main: builder.go
     binary: isomake
     ldflags:
-    - -s -w -X github.com/bhojpur/iso/pkg/version.Version={{.Version}}-{{.ShortCommit}}
+      - -s -w
+      - -X github.com/bhojpur/iso/pkg/version.Version={{.Version}}-{{.ShortCommit}}
+      - -X "github.com/bhojpur/iso/pkg/version.BuildTime={{ time "2006-01-02 15:04:05 MST" }}"
+      - -X "github.com/bhojpur/iso/pkg/version.BuildCommit={{ .FullCommit }}"
   - id: isomgr
     env:
       - CGO_ENABLED=0
-    main: builder.go
+    main: manager.go
     binary: isomgr
     ldflags:
       - -s -w
-      - -X "github.com/bhojpur/iso/cmd/manager.BuildTime={{ time "2006-01-02 15:04:05 MST" }}"
-      - -X "github.com/bhojpur/iso/cmd/manager.BuildCommit={{ .FullCommit }}"
+      - -X github.com/bhojpur/iso/pkg/version.Version={{.Version}}-{{.ShortCommit}}
+      - -X "github.com/bhojpur/iso/pkg/version.BuildTime={{ time "2006-01-02 15:04:05 MST" }}"
+      - -X "github.com/bhojpur/iso/pkg/version.BuildCommit={{ .FullCommit }}"
     goos:
       - linux
     goarch:
@@ -37,7 +41,10 @@ builds:
     main: cmd/container/main.go
     binary: isocntr
     ldflags:
-    - -s -w -X github.com/bhojpur/iso/pkg/version.Version={{.Version}}-{{.ShortCommit}}
+      - -s -w
+      - -X github.com/bhojpur/iso/pkg/version.Version={{.Version}}-{{.ShortCommit}}
+      - -X "github.com/bhojpur/iso/pkg/version.BuildTime={{ time "2006-01-02 15:04:05 MST" }}"
+      - -X "github.com/bhojpur/iso/pkg/version.BuildCommit={{ .FullCommit }}"
 archives:
   - format: binary # this removes the tar of the archives, leaving the binaries alone
     name_template: iso-{{ .Tag }}-{{ .Os }}-{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}

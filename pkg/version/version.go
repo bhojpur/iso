@@ -34,7 +34,9 @@ var (
 	Date string
 
 	// GitCommit will be overwritten automatically by the build system
-	GitCommit = "HEAD"
+	BuildTime string
+	// BuildCommit will be overwritten automatically by the build system
+	BuildCommit = "HEAD"
 )
 
 // Print writes the version info to stdout
@@ -46,7 +48,7 @@ func Print() {
 
 // FullVersion formats the version to be printed
 func FullVersion() string {
-	return fmt.Sprintf("%s, build %s", Version, GitCommit)
+	return fmt.Sprintf("%s, build %s", BuildTime, BuildCommit)
 }
 
 // RC checks if the Machine version is a release candidate or not

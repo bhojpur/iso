@@ -26,6 +26,7 @@ import (
 
 	"github.com/bhojpur/iso/cmd/manager/util"
 	bus "github.com/bhojpur/iso/pkg/manager/api/core/bus"
+	stamp "github.com/bhojpur/iso/pkg/version"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -35,8 +36,7 @@ var cfgFile string
 var Verbose bool
 
 const (
-	BhojpurCLIVersion = "0.0.1"
-	BhojpurEnvPrefix  = "BHOJPUR"
+	BhojpurEnvPrefix = "BHOJPUR"
 )
 
 var license = []string{
@@ -45,15 +45,8 @@ var license = []string{
 }
 
 // Build time and commit information.
-//
-// ⚠️ WARNING: should only be set by "-ldflags".
-var (
-	BuildTime   string
-	BuildCommit string
-)
-
 func version() string {
-	return fmt.Sprintf("%s-g%s %s", BhojpurCLIVersion, BuildCommit, BuildTime)
+	return fmt.Sprintf("%s-g%s %s", stamp.Version, stamp.BuildCommit, stamp.BuildTime)
 }
 
 // RootCmd represents the base command when called without any subcommands
