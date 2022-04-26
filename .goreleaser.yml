@@ -46,12 +46,37 @@ builds:
       - -X "github.com/bhojpur/iso/pkg/version.BuildTime={{ time "2006-01-02 15:04:05 MST" }}"
       - -X "github.com/bhojpur/iso/pkg/version.BuildCommit={{ .FullCommit }}"
 archives:
-  - format: binary # this removes the tar of the archives, leaving the binaries alone
-    name_template: iso-{{ .Tag }}-{{ .Os }}-{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}
+  - id: isomake
+    files:
+    - "none*"
+    format: binary # this removes the tar of the archives, leaving the binaries alone
+    name_template: isomake-{{ .Tag }}-{{ .Os }}-{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}
     builds:
     - isomake
+  - id: isocntr
+    files:
+    - "none*"
+    format: binary
+    name_template: isocntr-{{ .Tag }}-{{ .Os }}-{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}
+    builds:
     - isocntr
+    replacements:
+      darwin: Darwin
+      linux: Linux
+      386: i386
+      amd64: x86_64
+  - id: isomgr
+    files:
+    - "none*"
+    format: binary
+    name_template: isomgr-{{ .Tag }}-{{ .Os }}-{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}
+    builds:
     - isomgr
+    replacements:
+      darwin: Darwin
+      linux: Linux
+      386: i386
+      amd64: x86_64
 changelog:
   sort: asc
   filters:
