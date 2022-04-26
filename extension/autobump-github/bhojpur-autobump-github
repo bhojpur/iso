@@ -1,0 +1,397 @@
+#!/bin/bash
+
+# Copyright (c) 2018 Bhojpur Consulting Private Limited, India. All rights reserved.
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+
+# Requires yq and jq
+# It bumps to latest tag annotated in the Bhojpur ISO specifications
+
+FAIL_ON_ERROR="${FAIL_ON_ERROR:-false}"
+
+if [[ $FAIL_ON_ERROR == "true" ]]; then
+  set -e
+  set -o pipefail
+fi
+
+# Options
+AUTO_GIT="${AUTO_GIT:-false}"
+GIT_SIGNOFF=${GIT_SIGNOFF:-false}
+GIT_COMMIT_ARGS=${GIT_COMMIT_ARGS:-}
+REVBUMP_CHAR="${REVBUMP_CHAR:-+}"
+TOKEN="${TOKEN:-}" # e.g. -H "Authorization: token TOKEN"
+START_GIT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+HUB_ARGS="${HUB_ARGS:--b $START_GIT_BRANCH}"
+ROOT_DIR="${ROOT_DIR:-$PWD}"
+TREE_DIR="${TREE_DIR:-$ROOT_DIR/packages}"
+PKGAPI="${PKGAPI:-https://pkgapi.herokuapp.com}"
+
+if [[ "${AUTO_GIT}" == "true" ]] && [[ "${GIT_SIGNOFF}" == "true" ]]; then
+  GIT_COMMIT_ARGS="-s"
+fi
+
+funnyQuote() {
+    messageQuote=(
+    "$(curl -s -L https://raw.githubusercontent.com/EugeneKay/git-jokes/lulz/Jokes.txt | shuf -n 1)"
+    "$(curl -s -L https://raw.githubusercontent.com/shrutikapoor08/devjoke/master/jsonParser/Jokes.json | jq -rc '.[]' | shuf -n1)"
+    )
+
+     echo ${messageQuote[$RANDOM % ${#messageQuote[@]} ]}
+}
+
+# Fetch depedendencies if not available
+PATH=$PATH:$ROOT_DIR/.bin
+
+JQ_RELEASE="${JQ_RELEASE:-1.6}"
+YQ_RELEASE="${YQ_RELEASE:-3.3.4}"
+HUB_RELEASE="${HUB_RELEASE:-2.14.2}"
+
+hash jq 2>/dev/null || {
+    mkdir $ROOT_DIR/.bin/;
+    wget https://github.com/stedolan/jq/releases/download/jq-${JQ_RELEASE}/jq-linux64 -O $ROOT_DIR/.bin/jq
+    chmod +x $ROOT_DIR/.bin/jq
+}
+
+hash yq 2>/dev/null || {
+    mkdir $ROOT_DIR/.bin/;
+    wget https://github.com/mikefarah/yq/releases/download/${YQ_RELEASE}/yq_linux_amd64 -O $ROOT_DIR/.bin/yq
+    chmod +x $ROOT_DIR/.bin/yq
+}
+
+hash hub 2>/dev/null || {
+    mkdir $ROOT_DIR/.bin/;
+    wget https://github.com/github/hub/releases/download/v${HUB_RELEASE}/hub-linux-amd64-${HUB_RELEASE}.tgz -O $ROOT_DIR/.bin/hub
+    chmod +x $ROOT_DIR/.bin/hub
+}
+
+# Functions to retrieve latest package versions
+latest_sabayon() {
+    NAME=$1
+    CATEGORY=$2
+
+    echo $(curl -s -d "repo=${SABAYON_DATABASE}&category=${CATEGORY}&name=${NAME}&repository_type=sabayon" \
+            -X POST "${PKGAPI}/api/latest" \
+            | jq -r '.Packages[0].Version')
+}
+
+latest_gentoo() {
+    NAME=$1
+    CATEGORY=$2
+
+    echo $(curl -s -d "repo=gentoo&owner=gentoo&category=${CATEGORY}&name=${NAME}&repository_type=gentoo" \
+            -X POST "${PKGAPI}/api/latest" \
+            | jq -r '.Packages[0].Version')
+}
+
+# Bhojpur ISO tree package list
+PKG_LIST=$(isomgr tree pkglist --tree $TREE_DIR -o json)
+
+reverse_bump() {
+    local i="$1"
+    if [ "${AUTO_GIT}" == "true" ]; then
+        git checkout $BRANCH_NAME # Return to bump branch
+    fi
+
+    echo "Revbump for $i"
+    IFS=/ read -a package <<< $i
+    path=$(echo "$PKG_LIST" | jq -r ".packages[] | select(.name==\"${package[1]}\" and .category==\"${package[0]}\").path")
+
+    REVDEPYQ_ARGS=
+    deffile=$path/definition.yaml
+    if [ -e "$path/collection.yaml" ]; then
+        index=$(yq r $path/collection.yaml -j | jq ".packages | map(.name==\"${package[1]}\" and .category==\"${package[0]}\") | index(true)")
+        REVDEPYQ_ARGS="packages[$index]."
+        deffile="$path/collection.yaml"
+    fi
+
+    ver=$(yq r $deffile "${REVDEPYQ_ARGS}version")
+    revver=1
+
+    if echo "$ver" | grep -q "\\${REVBUMP_CHAR}.*\\${REVBUMP_CHAR}" || echo "$ver" | grep -q "\\${REVBUMP_CHAR}" ; then
+        l_ver=${ver%${REVBUMP_CHAR}*}
+        revver=${ver/$l_ver${REVBUMP_CHAR}/}
+        revver=$((revver+1))
+    fi
+    ver=${ver%${REVBUMP_CHAR}*}
+    ver="${ver}${REVBUMP_CHAR}${revver}"
+
+    yq w -i $deffile "${REVDEPYQ_ARGS}version" "$ver"
+
+    if [ "${AUTO_GIT}" == "true" ]; then
+        git add $path/
+        git commit $GIT_COMMIT_ARGS -m "reverse dep: bump $i for $PACKAGE_CATEGORY/$PACKAGE_NAME"
+        git push -f -v origin $BRANCH_NAME
+
+        # Branch is ready now to open PR
+        hub pull-request $HUB_ARGS -m "$(git log -1 --pretty=%B)" -m "$(funnyQuote)"
+
+        git checkout $START_GIT_BRANCH # Return to original branch
+    fi
+}
+
+template_string() {
+    local def="$1"
+    local string="$2"
+
+    while read -r line
+    do
+        if [ -z "$line" ]; then
+            continue
+        fi
+
+        pieces=($line)
+        key=${pieces[0]}
+        subkey=${pieces[1]}
+
+        if echo $subkey | grep -q "hook"; then
+            continue
+        fi
+
+        if [[ "$subkey" == "null" ]]; then
+            v=$(yq r $def "${YQ_ARGS}$key")
+            string=$(echo "$string" | sed "s@{{.Values.$key}}@$v@g")
+        else
+            v=$(yq r $def ${YQ_ARGS}${key}.\"${subkey}\")
+            string=$(echo "$string" | sed "s@{{.Values.$key.$subkey}}@$v@g")
+        fi
+    done <<< $(yq r $def "${YQ_ARGS}" -j | jq -cr '. as $data |
+    paths(scalars) | . as $path | "\($path[0]) \($path[1]) \($data | getpath($path) | tostring)"')
+    echo $string
+}
+
+for i in $(echo "$PKG_LIST" | jq -rc '.packages[]'); do
+
+    PACKAGE_PATH=$(echo "$i" | jq -r ".path")
+    PACKAGE_NAME=$(echo "$i" | jq -r ".name")
+    PACKAGE_CATEGORY=$(echo "$i" | jq -r ".category")
+    PACKAGE_VERSION=$(echo "$i" | jq -r ".version")
+    LATEST_TAG=
+    DEFINITION_FILE="$PACKAGE_PATH/definition.yaml"
+    YQ_ARGS=
+
+    if [ -e "$PACKAGE_PATH/collection.yaml" ]; then
+        index=$(yq r $PACKAGE_PATH/collection.yaml -j | jq ".packages | map(.name==\"$PACKAGE_NAME\" and .category==\"$PACKAGE_CATEGORY\") | index(true)")
+        YQ_ARGS="packages[$index]."
+        echo "Collection found, package $index"
+        DEFINITION_FILE="$PACKAGE_PATH/collection.yaml"
+    fi
+
+    STRIPPED_PACKAGE_VERSION=${PACKAGE_VERSION%${REVBUMP_CHAR}*}
+    VERSION=$STRIPPED_PACKAGE_VERSION
+
+    ## Reading Package labels starts
+
+    # Check if ignore flag is present
+    AUTOBUMP_IGNORE=$(yq r $DEFINITION_FILE "${YQ_ARGS}labels.\"autobump.ignore\"")
+    if [ "${AUTOBUMP_IGNORE}" = "1" ] ; then
+      continue
+    fi
+
+    # Best effort: get original package name from labels
+    GITHUB_REPO=$(yq r $DEFINITION_FILE "${YQ_ARGS}labels.\"github.repo\"")
+    GITHUB_OWNER=$(yq r $DEFINITION_FILE "${YQ_ARGS}labels.\"github.owner\"")
+
+    # Strategy can be: release, tags or "refs"
+    # Refs parses thru git tags
+    AUTOBUMP_STRATEGY=$(yq r $DEFINITION_FILE "${YQ_ARGS}labels.\"autobump.strategy\"")
+
+    # Package can opt-in for automatic revdeps revbump
+    AUTOBUMP_REVDEPS=$(yq r $DEFINITION_FILE "${YQ_ARGS}labels.\"autobump.revdeps\"")
+    AUTOBUMP_REVDEPS="${AUTOBUMP_REVDEPS:-true}"
+
+    # Prefix to trim from the version
+    TRIM_PREFIX=$(yq r $DEFINITION_FILE "${YQ_ARGS}labels.\"autobump.trim_prefix\"")
+
+    # A json map of replace rules
+    STRING_REPLACE=$(yq r $DEFINITION_FILE "${YQ_ARGS}labels.\"autobump.string_replace\"")
+
+
+    # A json list of strings contained in the releases to skip (e.g. betas)
+    SKIP_IF_CONTAIN=$(yq r $DEFINITION_FILE "${YQ_ARGS}labels.\"autobump.skip_if_contains\"")
+
+    # You can specify a string match that should be contained in the versions
+    # to be considered. Valid for "refs" and tagging strategy
+    VERSION_CONTAINS=$(yq r $DEFINITION_FILE "${YQ_ARGS}labels.\"autobump.version_contains\"")
+
+    AUTOBUMP_REFIX=$(yq r $DEFINITION_FILE "${YQ_ARGS}labels.\"autobump.prefix\"")
+
+    # Best effort: get original package name from labels
+    ORIGINAL_PACKAGE_NAME=$(yq r $DEFINITION_FILE "${YQ_ARGS}labels.\"original.package.name\"")
+    ORIGINAL_PACKAGE_CATEGORY=$(yq r $DEFINITION_FILE "${YQ_ARGS}labels.\"original.package.category\"")
+    ORIGINAL_PACKAGE_VERSION=$(yq r $DEFINITION_FILE "${YQ_ARGS}labels.\"original.package.version\"")
+
+    # Related packages to revbump regardless of their deptree
+    RELATED_PACKAGES=$(yq r $DEFINITION_FILE "${YQ_ARGS}labels.\"autobump.revbump_related\"")
+
+    # Checksum hook
+    CHECKSUM_HOOK=$(yq r $DEFINITION_FILE "${YQ_ARGS}labels.\"autobump.checksum_hook\"")
+
+    ## Reading Package labels ends
+
+    if [ -z "$ORIGINAL_PACKAGE_NAME" ]; then
+        ORIGINAL_PACKAGE_NAME=$PACKAGE_NAME
+    fi
+    if [ -z "$ORIGINAL_PACKAGE_CATEGORY" ]; then
+        ORIGINAL_PACKAGE_CATEGORY=$PACKAGE_CATEGORY
+    fi
+    if [ -z "$ORIGINAL_PACKAGE_VERSION" ]; then
+        ORIGINAL_PACKAGE_VERSION=$STRIPPED_PACKAGE_VERSION
+    fi
+
+    echo
+    echo "# Checking updates for package $i"
+    echo "- Github: $GITHUB_OWNER / $GITHUB_REPO"
+    echo "- Autobump Strategy: $AUTOBUMP_STRATEGY"
+    echo "- Autobump Prefix: $AUTOBUMP_REFIX"
+    echo "- Autobump reverse dependencies: $AUTOBUMP_REVDEPS"
+    echo "- Prefix trim: $TRIM_PREFIX"
+    echo "- String replace: $STRING_REPLACE"
+    echo "- Skip if contains: $SKIP_IF_CONTAIN"
+    echo "- Consider only if version contains: $VERSION_CONTAINS"
+    echo
+
+    SNAPSHOT_PREFIX=${AUTOBUMP_REFIX:-0.}
+
+    if [[ "$AUTOBUMP_STRATEGY" == "release" ]] && [ -n "${GITHUB_OWNER}" ] && [ -n "${GITHUB_REPO}" ]; then
+        if [ -n "$TOKEN" ]; then
+            LATEST_TAG=$(curl -H "Authorization: token $TOKEN" https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/releases/latest -s | jq .tag_name -r)
+        else
+            LATEST_TAG=$(curl https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/releases/latest -s | jq .tag_name -r)
+        fi
+    elif [[ "$AUTOBUMP_STRATEGY" == "refs" ]] &&  [ -n "${GITHUB_OWNER}" ] && [ -n "${GITHUB_REPO}" ]; then
+        if [ -n "$TOKEN" ]; then
+            LATEST_TAG=$(curl -H "Authorization: token $TOKEN" https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/git/refs/tags -s | jq '.[].ref | sub("refs\/tags\/"; "") | select(. | test("'$VERSION_CONTAINS'"))' -r | tail -n1 )
+        else
+            LATEST_TAG=$(curl https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/git/refs/tags -s | jq '.[].ref | sub("refs\/tags\/"; "") | select(. | test("'$VERSION_CONTAINS'"))' -r | tail -n1 )
+        fi
+    elif [[ "$AUTOBUMP_STRATEGY" == "snapshot" ]] || [[ "$AUTOBUMP_STRATEGY" == "git_hash" ]]; then
+        LATEST_TAG=${SNAPSHOT_PREFIX}$(date +%Y%m%d)
+    elif [[ "$AUTOBUMP_STRATEGY" == "custom" ]]; then
+        VERSION_HOOK=$(yq r $DEFINITION_FILE "${YQ_ARGS}labels.\"autobump.version_hook\"")
+        HOOK=$(yq r $DEFINITION_FILE "${YQ_ARGS}labels.\"autobump.hook\"")
+        LATEST_TAG=$(eval "$VERSION_HOOK")
+        echo "Executing $HOOK"
+        CUSTOM_VERSION=$(eval "$HOOK")
+        LATEST_TAG=${SNAPSHOT_PREFIX}${LATEST_TAG}
+    elif [ "${AUTOBUMP_STRATEGY}" == "gentoo" ]; then
+        LATEST_GENTOO_VERSION=$(latest_gentoo $ORIGINAL_PACKAGE_NAME $ORIGINAL_PACKAGE_CATEGORY)
+        if [ "$LATEST_GENTOO_VERSION" == "9999" ] || [ "$LATEST_GENTOO_VERSION" == "null" ]; then
+            LATEST_GENTOO_VERSION=
+        else
+            LATEST_TAG=$LATEST_GENTOO_VERSION
+        fi
+    elif [ "${AUTOBUMP_STRATEGY}" == "sabayon" ]; then
+        LATEST_TAG=$(latest_sabayon $ORIGINAL_PACKAGE_NAME $ORIGINAL_PACKAGE_CATEGORY)
+    elif [ -n "${GITHUB_OWNER}" ] && [ -n "${GITHUB_REPO}" ]; then
+        if [ -n "$TOKEN" ]; then
+            LATEST_TAG=$(curl -H "Authorization: token $TOKEN" https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/tags -s | jq -r '.[].name | select(. | test("'$VERSION_CONTAINS'"))' -r | head -1 )
+        else
+            LATEST_TAG=$(curl https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/tags -s | jq -r '.[].name | select(. | test("'$VERSION_CONTAINS'"))' -r | head -1 )
+        fi
+    fi
+
+    ORIGINAL_NEW_TAG=${LATEST_TAG}
+    LATEST_TAG=${LATEST_TAG#v} # semver
+    LATEST_TAG=${LATEST_TAG#$TRIM_PREFIX} # go..
+
+    for i in $(echo "$STRING_REPLACE" | jq -r 'keys[]'); do
+        WITH=$(echo "$STRING_REPLACE" | jq -r '."'$i'"')
+        echo "Replacing $i with '$WITH'"
+        LATEST_TAG=$(echo "$LATEST_TAG" | sed -r 's/'$i'+/'$WITH'/g')
+    done
+
+    for i in $(echo "$SKIP_IF_CONTAIN" | jq -r '.[]'); do
+        if [[ "$LATEST_TAG"  =~ "$i" ]]; then
+            echo "Skipping because latest release contains '$i'"
+            continue 2
+        fi
+    done
+
+    echo "Latest version found for $PACKAGE_NAME is: $LATEST_TAG. Current at $STRIPPED_PACKAGE_VERSION"
+
+    [[ "$LATEST_TAG" == "null" ]] && LATEST_TAG=
+    # versions are mismatching. Bump the version
+    if [ -n "$LATEST_TAG" ] && [ $LATEST_TAG != "$STRIPPED_PACKAGE_VERSION" ] ; then
+        echo "Bumping $PACKAGE_CATEGORY/$PACKAGE_NAME to $LATEST_TAG"
+
+        BRANCH_NAME="bump_${PACKAGE_NAME}_${PACKAGE_CATEGORY}"
+        if [ "${AUTO_GIT}" == "true" ]; then
+            git branch -D $BRANCH_NAME
+            git checkout -b $BRANCH_NAME
+        fi
+
+        # Generate new folder after the new version
+        # e.g. tree/package/1.1 to tree/package/1.2
+        package_dir=$(dirname $PACKAGE_PATH)
+
+        # Update runtime version
+        yq w -i $DEFINITION_FILE "${YQ_ARGS}version" "$LATEST_TAG" --style double
+       
+        if [ "${AUTOBUMP_STRATEGY}" == "gentoo" ] || [ "${AUTOBUMP_STRATEGY}" == "sabayon" ]; then
+            yq w -i $DEFINITION_FILE "${YQ_ARGS}labels.\"original.package.version\"" "$ORIGINAL_NEW_TAG" --style double
+            yq w -i $DEFINITION_FILE "${YQ_ARGS}labels.\"original.package.name\"" "$ORIGINAL_PACKAGE_NAME" --style double
+            yq w -i $DEFINITION_FILE "${YQ_ARGS}labels.\"original.package.category\"" "$ORIGINAL_PACKAGE_CATEGORY" --style double
+        fi
+
+        if [ "${AUTOBUMP_STRATEGY}" == "custom" ]; then
+            yq w -i $DEFINITION_FILE "${YQ_ARGS}labels.\"package.version\"" "$CUSTOM_VERSION" --style double
+        fi
+
+        if [[ "$AUTOBUMP_STRATEGY" == "git_hash" ]]; then
+            GIT_BRANCH=$(yq r $DEFINITION_FILE "${YQ_ARGS}labels.\"autobump.git.branch\"")
+            GIT_BRANCH="${GIT_BRANCH:-master}"
+            SHA=$(curl -H "Authorization: token $TOKEN" https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/git/refs/heads/$GIT_BRANCH -s | jq -r '.object.sha')
+            yq w -i $DEFINITION_FILE "${YQ_ARGS}labels.\"git.hash\"" "$SHA" --style double
+        fi
+
+        if [[ "$AUTOBUMP_STRATEGY" == "github_tag" ]]; then
+          yq w -i $DEFINITION_FILE "${YQ_ARGS}labels.\"github.tag\"" "$ORIGINAL_NEW_TAG" --style double
+        fi
+
+        if [ -n "$CHECKSUM_HOOK" ]; then
+            script=$(template_string "$DEFINITION_FILE" "$CHECKSUM_HOOK")
+            echo "Executing checksum hook $script"
+
+            CHECKSUM=$(eval $script)
+            yq w -i $DEFINITION_FILE "${YQ_ARGS}labels.\"package.checksum\"" "$CHECKSUM" --style double
+        fi
+
+        if [ "${AUTO_GIT}" == "true" ]; then
+            git add $PACKAGE_PATH/
+            git commit $GIT_COMMIT_ARGS -m "Bump $PACKAGE_CATEGORY/$PACKAGE_NAME to $LATEST_TAG"
+            git push -f -v origin $BRANCH_NAME
+
+            # Branch is ready now to open PR
+            hub pull-request $HUB_ARGS -m "$(git log -1 --pretty=%B)" -m "$(funnyQuote)"
+
+            git checkout $START_GIT_BRANCH # Return to original branch
+        fi
+    
+
+        if [[ "$AUTOBUMP_REVDEPS" == "true" ]]; then
+            for i in $(isomgr tree pkglist -b -t $TREE_DIR -m $PACKAGE_CATEGORY/$PACKAGE_NAME --revdeps); do
+                reverse_bump "$i"
+            done
+            for i in $RELATED_PACKAGES; do
+                echo "Bumping related package $i"
+                reverse_bump "$i"
+            done
+        fi
+    fi
+done

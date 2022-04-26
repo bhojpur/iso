@@ -1,0 +1,63 @@
+before:
+  hooks:
+    - go mod tidy
+dist: release
+source:
+  enabled: true
+  name_template: '{{ .ProjectName }}-{{ .Tag }}-source'
+checksum:
+  name_template: '{{ .ProjectName }}-{{ .Tag }}-checksums.txt'
+builds:
+  - id: isomake
+    env:
+    - CGO_ENABLED=0
+    main: cmd/machine/main.go
+    binary: isomake
+    ldflags:
+    - -s -w -X github.com/bhojpur/iso/pkg/version.Version={{.Version}}-{{.ShortCommit}}
+  - id: isomgr
+    env:
+      - CGO_ENABLED=0
+    main: builder.go
+    binary: isomgr
+    ldflags:
+      - -s -w
+      - -X "github.com/bhojpur/iso/cmd/manager.BuildTime={{ time "2006-01-02 15:04:05 MST" }}"
+      - -X "github.com/bhojpur/iso/cmd/manager.BuildCommit={{ .FullCommit }}"
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm
+      - arm64
+      - i386
+  - id: isocntr
+    env:
+    - CGO_ENABLED=0
+    main: cmd/container/main.go
+    binary: isocntr
+    ldflags:
+    - -s -w -X github.com/bhojpur/iso/pkg/version.Version={{.Version}}-{{.ShortCommit}}
+archives:
+  - format: binary # this removes the tar of the archives, leaving the binaries alone
+    name_template: iso-{{ .Tag }}-{{ .Os }}-{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}
+    builds:
+    - isomake
+    - isocntr
+    - isomgr
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^Merge pull request'
+release:
+  prerelease: auto
+  header: |
+    Bhojpur ISO is a multi-platform Package Manager based off from Containers. It uses Docker
+    (and other tools) to build packages.
+
+    It has zero dependencies and it is well suitable for "from scratch" environments.
+    It can also version entire "rootfs" and enables delivery of OTA-alike updates, making it
+    a perfect fit for the Edge Computing era and IoT/M2M embedded device

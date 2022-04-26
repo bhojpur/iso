@@ -1,0 +1,119 @@
+#!/bin/bash
+
+# Copyright (c) 2018 Bhojpur Consulting Private Limited, India. All rights reserved.
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+
+# Wrapper around Bhojpur ISO extension geniso to accept a yaml as an input
+
+set -e
+SPEC=$1
+
+if [ ! -f "${SPEC}" ] ; then
+  echo "Invalid Bhojpur ISO specification ${SPEC}. File not found"
+  exit 1
+fi
+
+create_iso_metadata_file () {
+  local iso=$1
+  local sha256=$2
+  local f=$3
+
+  local d=$(date +%Y%m%d)
+
+  echo "
+date: $d
+iso: $iso
+sha256: ${sha256}
+" > $f
+
+  return 0
+}
+
+create_iso_metadata_jsonfile () {
+  local iso=$1
+  local sha256=$2
+  local f=$3
+
+  local d=$(date +%Y%m%d)
+
+  echo "{
+"date": "$d",
+"iso": "$iso",
+"sha256": "${sha256}"
+}" > $f
+
+  return 0
+}
+
+export OVERLAY="$(yq r $SPEC 'overlay')"
+export IMAGE_NAME="$(yq r $SPEC 'image_prefix')"
+date="$(yq r $SPEC 'image_date')"
+
+if [[ "$date" == "true" ]]; then
+    export IMAGE_NAME=$IMAGE_NAME$(date +%Y%m%d).iso         
+else 
+    export IMAGE_NAME=$IMAGE_NAME.iso
+fi
+
+# Optionally supply the name of kernel/rootfs (rootfs in cpio.xz format) located in the /boot folder
+# of the overlayfs, or the initramfs one
+export INITRAMFS_KERNEL="$(yq r $SPEC 'initramfs.kernel_file')"
+export INITRAMFS_ROOTFS="$(yq r $SPEC 'initramfs.rootfs_file')"
+
+export KEEP_BHOJPUR_DB="$(yq r $SPEC 'packages.keep_bhojpur_db')"
+export ISOLABEL="$(yq r $SPEC 'label')"
+
+export BHOJPUR_PACKAGES="$(yq r -j $SPEC 'packages.rootfs' | jq -r '.[]' | xargs echo)"
+export BHOJPUR_REPOS="$(yq r -j $SPEC 'repository.packages' | jq -r '.[]' | xargs echo)"
+export FIRST_STAGE="$(yq r -j $SPEC 'packages.initramfs' | jq -r '.[]' | xargs echo)"
+export BHOJPUR_INITRAMFS_REPOS="$(yq r -j $SPEC 'repository.initramfs' | jq -r '.[]' | xargs echo)"
+
+export ISOIMAGE_PACKAGES="$(yq r -j $SPEC 'packages.isoimage' | jq -r '.[]' | xargs echo)"
+export UEFI_PACKAGES="$(yq r -j $SPEC 'packages.uefi' | jq -r '.[]' | xargs echo)"
+export OVERLAY_HOOKS="$(yq r -j $SPEC 'overlay_hooks' | jq -r '.[]' | xargs echo)"
+export BHOJPUR_BIN="${BHOJPUR_BIN:-/usr/bin/bhojpur/isomgr}"
+export ROOT_DIR="${ROOT_DIR:-$PWD}"
+export BHOJPUR_CONFIG="$ROOT_DIR/$(yq r $SPEC 'bhojpur.config')"
+export BHOJPUR_ISO_NOLOCK="true"
+
+echo "Packages"
+echo "--------"
+echo "Rootfs: $BHOJPUR_PACKAGES"
+echo "UEFI: $UEFI_PACKAGES"
+echo "ISO: $ISOIMAGE_PACKAGES"
+echo "Initramfs: $FIRST_STAGE"
+echo "Package Repositories: ${BHOJPUR_REPOS}"
+echo "Initramfs Repositories: ${BHOJPUR_INITRAMFS_REPOS}"
+echo "--------"
+echo
+echo "Overlay: $OVERLAY"
+echo "Overlay Hooks: ${OVERLAY_HOOKS}"
+echo "Bhojpur ISO manager: $BHOJPUR_BIN"
+echo "Bhojpur ISO manager config: $BHOJPUR_CONFIG"
+echo "Image name: $IMAGE_NAME"
+
+isomgr geniso
+
+IMAGE_SHA256=`sha256sum $IMAGE_NAME`
+
+create_iso_metadata_file "$IMAGE_NAME" "$IMAGE_SHA256" "iso-meta.yaml"
+create_iso_metadata_jsonfile "$IMAGE_NAME" "$IMAGE_SHA256" "iso-meta.json"
+
+echo $IMAGE_SHA256 > $IMAGE_NAME.sha256

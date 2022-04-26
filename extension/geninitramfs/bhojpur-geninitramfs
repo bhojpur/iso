@@ -1,0 +1,103 @@
+#!/bin/bash
+
+# Copyright (c) 2018 Bhojpur Consulting Private Limited, India. All rights reserved.
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+
+export tmpdir="$(mktemp -d)"
+INITRAMFS="${INITRAMFS:-$PWD/initramfs.cpio.xz}"
+BHOJPUR_BIN="${BHOJPUR_BIN:-$(which isomgr)}"
+
+bhojpur_install() {
+
+  local rootfs=$1
+  local packages="$2"
+
+  ## Initial rootfs
+  pushd "$rootfs"
+
+      cat <<EOF > $tmpdir/iso.yaml
+general:
+  debug: true
+system:
+  rootfs: $rootfs/
+  database_path: "/"
+  database_engine: "boltdb"
+config_from_host: true
+EOF
+
+  set -e
+  ${BHOJPUR_BIN} --config $tmpdir/iso.yaml config
+  ${BHOJPUR_BIN} --config $tmpdir/iso.yaml install -y ${packages}
+  ${BHOJPUR_BIN} --config $tmpdir/iso.yaml cleanup
+  rm -rf $rootfs/repos
+  rm -rf $rootfs/iso.db
+  rm -rf $rootfs/packages
+
+  popd
+}
+
+cleanup() {
+    rm -rf "$tmpdir"
+}
+
+trap cleanup 1 2 3 6 EXIT
+
+main () {
+
+
+    _help () {
+      echo "Copyright (c) 2018 Bhojpur Consulting Private Limited, India.
+
+isomgr geninitramfs [opts]
+
+Generate an initramfs with the supplied Bhojpur ISO packages. The packages have to be available in the repositories of the host system
+
+Example:
+
+  $> INITRAMFS=/path/to/initramfs isomgr geninitramfs package1 package2 package3
+"
+      return 0
+    }
+
+    if [ $# -eq 0 ] ; then
+      _help
+      exit 1
+    fi
+
+    if [[ $1 == "help" ]]; then
+      _help
+       exit 1
+    fi
+
+  mkdir $tmpdir/rootfs
+  bhojpur_install $tmpdir/rootfs "$@"
+
+  pushd  $tmpdir/rootfs
+   find . | cpio -R root:root -H newc -o | ${XZ:-xz} -9 --check=none > $INITRAMFS
+  popd  
+
+  cleanup
+  echo "Initramfs generated at $INITRAMFS"
+  
+  return 0
+}
+
+main "$@"
+exit $?

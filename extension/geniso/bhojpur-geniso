@@ -1,0 +1,120 @@
+#!/bin/bash
+
+# Copyright (c) 2018 Bhojpur Consulting Private Limited, India. All rights reserved.
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+
+set -e
+
+. "/usr/share/bhojpur/iso/extension/geniso/func.sh"
+
+export IMAGE_NAME="${IMAGE_NAME:-bhojpur_os.iso}"
+export BHOJPUR_PACKAGES="${BHOJPUR_PACKAGES:-}"
+export BHOJPUR_REPOS="${BHOJPUR_REPOS:-}"
+export BHOPUR_INITRAMFS_REPOS="${BHOJPUR_INITRAMFS_REPOS:-}"
+export BHOJPUR_BIN="${BHOJPUR_BIN:-../isomgr}"
+export ROOT_DIR="${ROOT_DIR:-$PWD}"
+export BHOJPUR_CONFIG="${BHOJPUR_CONFIG:-../conf/bhojpur-local.yaml}"
+export WORKDIR="$ROOT_DIR/isowork"
+export OVERLAY="${OVERLAY:-false}"
+export ISOLABEL="${ISOLABEL:-ISOIMAGE}"
+export ARCH="${ARCH:-x86_64}"
+export ISOIMAGE_PACKAGES="${ISOIMAGE_PACKAGES:-live/syslinux system/sabayon-live-boot}"
+export UEFI_PACKAGES="${UEFI_PACKAGES:-live/systemd-boot system/sabayon-live-boot}"
+export BHOJPUR_YES=true
+#export BOOT_DIR="$WORKDIR/boot"
+export ROOTFS_DIR="$WORKDIR/rootfs"
+export OVERLAY_DIR="$WORKDIR/overlay"
+export ISOIMAGE="$WORKDIR/isoimage"
+export KERNEL_INSTALLED=$WORKDIR/kernel/kernel_installed
+export FIRST_STAGE="${FIRST_STAGE:-}"
+export GEN_ROOTFS="${GEN_ROOTFS:-true}"
+export INITRAMFS_KERNEL="${INITRAMFS_KERNEL:-bzImage}"
+export INITRAMFS_ROOTFS="${INITRAMFS_ROOTFS:-}"
+export SCRIPT_DIR="${SCRIPT_DIR:-/usr/share/bhojpur/iso/extension/geniso}"
+export SUDO=${SUDO:-}
+export KEEP_BHOJPUR_DB=${KEEP_BHOJPUR_DB:-false}
+export CA_CERTIFICATES=${CA_CERTIFICATES:-/etc/ssl/certs/ca-certificates.crt}
+
+export BHOJPUR_GENISO_OUTPUT="${BHOJPUR_GENISO_OUTPUT:-$WORKDIR/bhojpur_install.log}"
+export BHOJPUR_BOX_INSTALLER=${BHOJPUR_BOX_INSTALLER:-0}
+export BHOJPUR_OPTS="${BHOJPUR_OPTS:-}"
+
+trap cleanup 1 2 3 6 EXIT
+
+cleanup()
+{
+   umount_rootfs  "$ROOTFS_DIR"
+   umount_rootfs  "$OVERLAY_DIR"
+}
+
+run_hooks()
+{
+  if [ -n "${OVERLAY_HOOKS}" ] ; then
+    for script in ${OVERLAY_HOOKS}; do
+      run_hook "${OVERLAY_DIR}" "${script}"
+    done
+  fi
+}
+
+cleanup
+
+if [[ "$GEN_ROOTFS" == true ]]; then
+  mkdir -p $WORKDIR
+
+  rm -rf "$ROOTFS_DIR"
+  mkdir -p "$ROOTFS_DIR"
+
+  rm -rf "$OVERLAY_DIR"
+  mkdir -p "$OVERLAY_DIR"
+
+  if [[ "$OVERLAY" == true ]]; then
+    info "Building overlay"
+    if [[ -n "$FIRST_STAGE" ]]; then
+      info "Installing packages for initramfs"
+      if [ ${BHOJPUR_BOX_INSTALLER} -eq 1 ] ; then
+        bhojpur_box_install "$ROOTFS_DIR" "${FIRST_STAGE}" "${BHOJPUR_INITRAMFS_REPOS}"
+      else
+        bhojpur_install "$ROOTFS_DIR" "${FIRST_STAGE}" "${BHOJPUR_INITRAMFS_REPOS}"
+      fi
+    fi
+
+    if [ ${BHOJPUR_BOX_INSTALLER} -eq 1 ] ; then
+      bhojpur_box_install "$OVERLAY_DIR" "${BHOJPUR_PACKAGES}" "${BHOJPUR_REPOS}" "${KEEP_BHOJPUR_DB}"
+    else
+      bhojpur_install "$OVERLAY_DIR" "${BHOJPUR_PACKAGES}" "${BHOJPUR_REPOS}" "${KEEP_BHOJPUR_DB}"
+    fi
+
+    run_hooks
+  else
+    if [ ${BHOJPUR_BOX_INSTALLER} -eq 1 ] ; then
+      bhojpur_box_install "$ROOTFS_DIR" "${BHOJPUR_PACKAGES}" "${BHOJPUR_REPOS}"
+    else
+      bhojpur_install "$ROOTFS_DIR" "${BHOJPUR_PACKAGES}" "${BHOJPUR_REPOS}"
+    fi
+  fi
+fi
+
+for script in $(ls ${SCRIPT_DIR} | grep '^[0-9]*_.*.sh'); do
+  #info "Running phase '$script'."
+  ${SCRIPT_DIR}/$script || {
+    err "${script}: Something went wrong! Exiting Bhojpur ISO now!"
+    exit 1
+  }
+done

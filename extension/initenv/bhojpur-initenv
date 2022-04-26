@@ -1,0 +1,352 @@
+#!/bin/bash
+
+# Copyright (c) 2018 Bhojpur Consulting Private Limited, India. All rights reserved.
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+
+BHOJPUR_REPO_NAME="${BHOJPUR_REPO_NAME:-}"
+BHOJPUR_REPO_CACHE="${BHOJPUR_REPO_CACHE:-}"
+BHOJPUR_REPO_MULTIARCH="${BHOJPUR_REPO_MULTIARCH:-0}"
+BHOJPUR_REPO_DESCR="${BHOJPUR_REPO_DESCR:-}"
+BHOJPUR_REPO_DIR="${BHOJPUR_REPO_DIR:-.}"
+BHOJPUR_REPO_ARCH="${BHOJPUR_REPO_ARCH:-amd64}"
+QUIET="${QUIET:-0}"
+
+summary () {
+  echo "Creating Bhojpur ISO Repository Tree:
+
+BHOJPUR_REPO_NAME:  ${BHOJPUR_REPO_NAME}
+BHOJPUR_REPO_CACHE: ${BHOJPUR_REPO_CACHE}
+BHOJPUR_REPO_MULTIARCH: ${BHOJPUR_REPO_MULTIARCH}
+BHOJPUR_REPO_DESCR: ${BHOJPUR_REPO_DESCR}
+BHOJPUR_REPO_DIR: ${BHOJPUR_REPO_DIR}
+BHOJPUR_REPO_ARCH: ${BHOJPUR_REPO_ARCH}
+"
+  return 0
+}
+
+initenv () {
+
+  local makefile_template=""
+
+  if [[ ! -d "${BHOJPUR_REPO_DIR}" ]] ; then
+    mkdir ${BHOJPUR_REPO_DIR} || {
+      echo "Error on create directory ${BHOJPUR_REPO_DIR}."
+      return 1
+    }
+  fi
+
+  # Check write permission
+  touch ${BHOJPUR_REPO_DIR}/.tmp || {
+    echo "Directory ${BHOJPUR_REPO_DIR} is not writable."
+    return 1
+  }
+  rm ${BHOJPUR_REPO_DIR}/.tmp
+
+
+  if [ "${BHOJPUR_REPO_MULTIARCH}" = "1" ] ; then
+    mkdir -p ${BHOJPUR_REPO_DIR}/${BHOJPUR_REPO_ARCH}/packages/
+    touch ${BHOJPUR_REPO_DIR}/${BHOJPUR_REPO_ARCH}/packages/.keep
+    mkdir -p ${BHOJPUR_REPO_DIR}/multi-arch/packages/
+    touch ${BHOJPUR_REPO_DIR}/multi-arch/packages/.keep
+
+    makefile_template="
+BACKEND?=docker
+CONCURRENCY?=1
+CI_ARGS?=
+PACKAGES?=
+
+# Abs path only. It gets copied in chroot in pre-seed stages
+export BHOJPUR_ISO_MANAGER?=/usr/bin/bhojpur/isomgr
+export ROOT_DIR:=\$(shell dirname \$(realpath \$(lastword \$(MAKEFILE_LIST))))
+DESTINATION?=\$(ROOT_DIR)/build
+COMPRESSION?=gzip
+export COMMON_TREE?=\${ROOT_DIR}/multi-arch/packages
+export TREE?=\$(ROOT_DIR)/${BHOJPUR_REPO_ARCH}/packages
+REPO_CACHE?=${BHOJPUR_REPO_CACHE}
+export REPO_CACHE
+BUILD_ARGS?=--pull --no-spinner
+SUDO?=
+VALIDATE_OPTIONS?=-s
+ARCH?=amd64
+
+ifneq (\$(strip \$(REPO_CACHE)),)
+	BUILD_ARGS+=--image-repository \$(REPO_CACHE)
+endif
+
+.PHONY: all
+all: deps build
+
+.PHONY: deps
+deps:
+	@echo \"Installing Bhojpur ISO packages\"
+	go get -u github.com/bhojpur/iso
+
+.PHONY: clean
+clean:
+	\$(SUDO) rm -rf build/ *.tar *.metadata.yaml
+
+.PHONY: build
+build: clean
+	mkdir -p \$(DESTINATION)
+	\$(SUDO) \$(BHOJPUR_ISO_MANAGER) build \$(BUILD_ARGS) --tree=\$(COMMON_TREE) --tree=\$(TREE) \$(PACKAGES) --destination \$(DESTINATION) --backend \$(BACKEND) --concurrency \$(CONCURRENCY) --compression \$(COMPRESSION)
+
+.PHONY: build-all
+build-all: clean
+	mkdir -p \$(DESTINATION)
+	\$(SUDO) \$(BHOJPUR_ISO_MANAGER) build \$(BUILD_ARGS) --tree=\$(COMMON_TREE) --tree=\$(TREE) --full --destination \$(DESTINATION) --backend \$(BACKEND) --concurrency \$(CONCURRENCY) --compression \$(COMPRESSION)
+
+.PHONY: rebuild
+rebuild:
+	\$(SUDO) \$(BHOJPUR_ISO_MANAGER) build \$(BUILD_ARGS) --tree=\$(COMMON_TREE) --tree=\$(TREE) \$(PACKAGES) --destination \$(DESTINATION) --backend \$(BACKEND) --concurrency \$(CONCURRENCY) --compression \$(COMPRESSION)
+
+.PHONY: rebuild-all
+rebuild-all:
+	\$(SUDO) \$(BHOJPUR_ISO_MANAGER) build \$(BUILD_ARGS) --tree=\$(COMMON_TREE) --tree=\$(TREE) --full --destination \$(DESTINATION) --backend \$(BACKEND) --concurrency \$(CONCURRENCY) --compression \$(COMPRESSION)
+
+.PHONY: create-repo
+create-repo:
+	\$(SUDO) \$(BHOJPUR_ISO_MANAGER) create-repo --tree \"\$(TREE)\" --tree \"\$(COMMON_TREE)\" \\
+    --output \$(DESTINATION) \\
+    --packages \$(DESTINATION) \\
+    --name \"${BHOJPUR_REPO_NAME}\" \\
+    --descr \"${BHOJPUR_REPO_DESCR} \$(ARCH)\" \\
+    --urls \"http://localhost:8000\" \\
+    --tree-compression \$(COMPRESSION) \\
+    --tree-filename tree.tar \\
+    --meta-compression \$(COMPRESSION) \\
+    --type http
+
+.PHONY: serve-repo
+serve-repo:
+	BHOJPUR_ISO_NOLOCK=true \$(BHOJPUR_ISO_MANAGER) serve-repo --port 8000 --dir \$(DESTINATION)
+
+auto-bump:
+	TREE_DIR=\$(ROOT_DIR) \$(BHOJPUR_ISO_MANAGER) autobump-github
+
+autobump: auto-bump
+
+validate:
+	\$(BHOJPUR_ISO_MANAGER)  tree validate --tree \$(TREE) --tree=\$(COMMON_TREE) \$(VALIDATE_OPTIONS)
+"
+
+  else
+    mkdir -p ${BHOJPUR_REPO_DIR}/packages/
+    touch ${BHOJPUR_REPO_DIR}/packages/.keep
+
+
+    makefile_template="
+BACKEND?=docker
+CONCURRENCY?=1
+CI_ARGS?=
+PACKAGES?=
+
+# Abs path only. It gets copied in chroot in pre-seed stages
+export BHOJPUR_ISO_MANAGER?=/usr/bin/bhojpur/isomgr
+export ROOT_DIR:=\$(shell dirname \$(realpath \$(lastword \$(MAKEFILE_LIST))))
+DESTINATION?=\$(ROOT_DIR)/build
+COMPRESSION?=gzip
+CLEAN?=false
+export TREE?=\$(ROOT_DIR)/packages
+REPO_CACHE?=${BHOJPUR_REPO_CACHE}
+export REPO_CACHE
+BUILD_ARGS?=--pull --no-spinner
+SUDO?=
+VALIDATE_OPTIONS?=-s
+ARCH?=amd64
+
+ifneq (\$(strip \$(REPO_CACHE)),)
+	BUILD_ARGS+=--image-repository \$(REPO_CACHE)
+endif
+
+.PHONY: all
+all: deps build
+
+.PHONY: deps
+deps:
+	@echo \"Installing Bhojpur ISO packages\"
+	go get -u github.com/bhojpur/iso
+
+.PHONY: clean
+clean:
+	\$(SUDO) rm -rf build/ *.tar *.metadata.yaml
+
+.PHONY: build
+build: clean
+	mkdir -p \$(DESTINATION)
+	\$(SUDO) \$(BHOJPUR_ISO_MANAGER) build \$(BUILD_ARGS) --tree=\$(TREE) \$(PACKAGES) --destination \$(DESTINATION) --backend \$(BACKEND) --concurrency \$(CONCURRENCY) --compression \$(COMPRESSION)
+
+.PHONY: build-all
+build-all: clean
+	mkdir -p \$(DESTINATION)
+	\$(SUDO) \$(BHOJPUR_ISO_MANAGER) build \$(BUILD_ARGS) --tree=\$(TREE) --full --destination \$(DESTINATION) --backend \$(BACKEND) --concurrency \$(CONCURRENCY) --compression \$(COMPRESSION)
+
+.PHONY: rebuild
+rebuild:
+	\$(SUDO) \$(BHOJPUR_ISO_MANAGER) build \$(BUILD_ARGS) --tree=\$(TREE) \$(PACKAGES) --destination \$(DESTINATION) --backend \$(BACKEND) --concurrency \$(CONCURRENCY) --compression \$(COMPRESSION)
+
+.PHONY: rebuild-all
+rebuild-all:
+	\$(SUDO) \$(BHOJPUR_ISO_MANAGER) build \$(BUILD_ARGS) --tree=\$(TREE) --full --destination \$(DESTINATION) --backend \$(BACKEND) --concurrency \$(CONCURRENCY) --compression \$(COMPRESSION)
+
+.PHONY: create-repo
+create-repo:
+	\$(SUDO) \$(BHOJPUR_ISO_MANAGER) create-repo --tree \"\$(TREE)\" \\
+    --output \$(DESTINATION) \\
+    --packages \$(DESTINATION) \\
+    --name \"${BHOJPUR_REPO_NAME}\" \\
+    --descr \"${BHOJPUR_REPO_DESCR} \$(ARCH)\" \\
+    --urls \"http://localhost:8000\" \\
+    --tree-compression \$(COMPRESSION) \\
+    --tree-filename tree.tar \\
+    --meta-compression \$(COMPRESSION) \\
+    --type http
+
+.PHONY: serve-repo
+serve-repo:
+	BHOJPUR_ISO_NOLOCK=true \$(BHOJPUR_ISO_MANAGER) serve-repo --port 8000 --dir \$(DESTINATION)
+
+auto-bump:
+	TREE_DIR=\$(ROOT_DIR) \$(BHOJPUR_ISO_MANAGER) autobump-github
+
+autobump: auto-bump
+
+validate:
+	\$(BHOJPUR_ISO_MANAGER) tree validate --tree \$(TREE) \$(VALIDATE_OPTIONS)
+"
+  fi
+
+  echo "${makefile_template}" > ${BHOJPUR_REPO_DIR}/Makefile
+
+  return 0
+}
+
+main () {
+
+
+  parse_args () {
+
+    _help () {
+      echo "Copyright (c) 2018 Bhojpur Consulting Private Limited, India
+
+isomgr initenv [opts]
+
+Initialize a repository tree for build Bhojpur ISO packages:
+
+  * create Makefile
+  * empty packages tree(s)
+
+Example:
+
+  $> isomgr initenv -- --name foo-repo --image-repository <mydockeruser>/<cache-prefix>
+
+Available options:
+
+--help|-h                             Show this help message.
+--name <REPO_NAME>                    Name of the repository.
+--image-repository <REPO_CACHE>       Set repository image cache.
+--multi-arch                          Setup a multi arch tree. Default is single arch.
+--descr <DESCR>                       Description of the repository.
+--dir <DIR>                           Path where create the repository tree. Default \"${BHOJPUR_REPO_DIR}\".
+--arch <ARCH>                         Default build arch. Default \"${BHOJPUR_REPO_ARCH}\".
+--quiet                               Quiet output.
+"
+      return 0
+    }
+
+    if [ $# -eq 0 ] ; then
+      _help
+      exit 1
+    fi
+
+    local short_opts="h"
+    local long_opts="help name image-repository multi-arch descr dir arch quiet"
+    $(set -- $(getopt -u -q -a -o "${short_opts}" -l "${long_opts}" -- "$@"))
+
+    while [ $# -gt 0 ] ; do
+
+      case "$1" in
+        -h|--help)
+          _help
+          exit 1
+          ;;
+        --name)
+          BHOJPUR_REPO_NAME=$2
+          shift
+          ;;
+        --image-repository)
+          BHOJPUR_REPO_CACHE=$2
+          shift
+          ;;
+        --multi-arch)
+          BHOJPUR_REPO_MULTIARCH=1
+          ;;
+        --descr)
+          BHOJPUR_REPO_DESCR=$2
+          shift
+          ;;
+        --dir)
+          BHOJPUR_REPO_DIR=$2
+          shift
+          ;;
+        --arch)
+          BHOJPUR_REPO_ARCH=$2
+          shift
+          ;;
+        --quiet)
+          QUIET=1
+          ;;
+        --)
+          ;;
+        *)
+          echo "Invalid parameter $1"
+          exit 1
+          ;;
+      esac
+
+      shift
+    done
+
+    if [ -z "${BHOJPUR_REPO_NAME}" ] ; then
+      echo "ERROR: Missing repository name"
+      exit 1
+    fi
+
+    return 0
+  }
+
+  parse_args "$@"
+
+  unset -f parse_args
+
+  if [ "${QUIET}" == "0" ] ; then
+    summary
+  fi
+
+  initenv || return 1
+
+  if [ "${QUIET}" == "0" ] ; then
+    echo "Repository ${BHOJPUR_REPO_NAME} created correctly."
+  fi
+
+  return 0
+}
+
+main "$@"
+exit $?

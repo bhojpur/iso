@@ -1,0 +1,8 @@
+name: "extension"
+category: "build"
+version: 0.0.1
+labels:
+  github.repo: "iso"
+  github.owner: "bhojpur"
+  github.tag: "0.0.1 "
+  autobump.strategy: "github_tag"
