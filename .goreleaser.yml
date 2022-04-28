@@ -1,3 +1,4 @@
+project_name: iso
 before:
   hooks:
     - go mod tidy
@@ -15,7 +16,7 @@ builds:
     binary: isomake
     ldflags:
       - -s -w
-      - -X github.com/bhojpur/iso/pkg/version.Version={{.Version}}-{{.ShortCommit}}
+      - -X "github.com/bhojpur/iso/pkg/version.Version={{.Version}}-{{.ShortCommit}}"
       - -X "github.com/bhojpur/iso/pkg/version.BuildTime={{ time "2006-01-02 15:04:05 MST" }}"
       - -X "github.com/bhojpur/iso/pkg/version.BuildCommit={{ .FullCommit }}"
   - id: isomgr
@@ -25,7 +26,7 @@ builds:
     binary: isomgr
     ldflags:
       - -s -w
-      - -X github.com/bhojpur/iso/pkg/version.Version={{.Version}}-{{.ShortCommit}}
+      - -X "github.com/bhojpur/iso/pkg/version.Version={{.Version}}-{{.ShortCommit}}"
       - -X "github.com/bhojpur/iso/pkg/version.BuildTime={{ time "2006-01-02 15:04:05 MST" }}"
       - -X "github.com/bhojpur/iso/pkg/version.BuildCommit={{ .FullCommit }}"
     goos:
@@ -42,7 +43,7 @@ builds:
     binary: isocntr
     ldflags:
       - -s -w
-      - -X github.com/bhojpur/iso/pkg/version.Version={{.Version}}-{{.ShortCommit}}
+      - -X "github.com/bhojpur/iso/pkg/version.Version={{.Version}}-{{.ShortCommit}}"
       - -X "github.com/bhojpur/iso/pkg/version.BuildTime={{ time "2006-01-02 15:04:05 MST" }}"
       - -X "github.com/bhojpur/iso/pkg/version.BuildCommit={{ .FullCommit }}"
 archives:
@@ -53,10 +54,15 @@ archives:
     name_template: isomake-{{ .Tag }}-{{ .Os }}-{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}
     builds:
     - isomake
+    replacements:
+      darwin: Darwin
+      linux: Linux
+      386: i386
+      amd64: x86_64
   - id: isocntr
     files:
     - "none*"
-    format: binary
+    format: binary # this removes the tar of the archives, leaving the binaries alone
     name_template: isocntr-{{ .Tag }}-{{ .Os }}-{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}
     builds:
     - isocntr
@@ -68,7 +74,7 @@ archives:
   - id: isomgr
     files:
     - "none*"
-    format: binary
+    format: binary # this removes the tar of the archives, leaving the binaries alone
     name_template: isomgr-{{ .Tag }}-{{ .Os }}-{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}
     builds:
     - isomgr
